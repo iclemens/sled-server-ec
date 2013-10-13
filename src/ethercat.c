@@ -52,7 +52,7 @@ uint8_t *ec_read_header(uint8_t *buffer, ethercat_header_t *header)
     header->src_addr[i] = buffer[i];
   buffer += 6;
 
-  header->proto_type = buffer[0] | (buffer[1] << 8);
+  header->proto_type = buffer[1] | (buffer[0] << 8);
   buffer += 2;
 
   if(header->proto_type == ETHERCAT_TYPE) {
