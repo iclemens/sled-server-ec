@@ -1,26 +1,34 @@
 
 #include <string.h>
 #include <stdio.h>
-#include <unistd.h>
-#include <arpa/inet.h>
 
 #include "ethercat.h"
-#include "ethercat_socket.h"
 
+
+void read_callback(const address_t address, void *payload, uint16_t length, const void *data)
+{
+	printf("Received %d bytes; address = %08x!\n", length, address.logical);
+}
 
 int main()
 {
-	int sock = open_socket("eth2");
+	struct ethercat_t *ethercat = ec_create("eth2");
+
+	address_t address;
+	address.physical.ado = 0x0002;
+	address.physical.adp = 0x0130;
+
+	ec_request_read(ethercat, address, 30, read_callback, NULL, EC_CALL_ONESHOT | EC_ADDR_AI);
+
+	ec_do_cycle(ethercat);
 
 	// Writing to 0x0010 seems to set the address
 
 	// Setup test frame
-	uint8_t data[] = {0x00, 0xd0, 0xb7, 0xbd, 0x22, 0x56,
-                    0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                    0x88, 0xa4,
+/*	uint8_t data[] = {
                     0x0e, 0x10,
 
-										// START OF DATAGRAM
+			// START OF DATAGRAM
 										0x04, 	// Auto increment read (was 7 broadcast read)
 										0x87, 
 										0x02, 0x00, // Auto increment address 1
@@ -39,7 +47,9 @@ int main()
 
   decode(buffer);
 
-	close(sock);
+	close(sock);*/
+
+	ec_destroy(&ethercat);
 
 	return 0;
 }

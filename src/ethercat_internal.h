@@ -1,8 +1,8 @@
 #ifndef __ETHERCAT_INTERNAL_H__
 #define __ETHERCAT_INTERNAL_H__
 
+#include "ethercat.h"
 #include <stdint.h>
-
 
 static const uint16_t ETHERCAT_TYPE = 0x88A4;
 
@@ -46,17 +46,6 @@ struct ethercat_header_t
   payload_type_t type;
 };
 
-
-union address_t
-{
-  struct {
-    uint16_t ado;
-    uint16_t adp;
-  } physical;
-  uint32_t logical;
-};
-
-
 struct datagram_t
 {
   command_type_t command;
@@ -92,6 +81,27 @@ static const char *command_description[] = {
   "Configured address read/multiple write",
   "Unrecognized (0xE)",
   "Unrecognized (0xF)"
+};
+
+
+struct ethercat_operation_t
+{
+	command_type_t command;
+	uint16_t length;
+	int flags;
+
+	ec_read_callback_t *read_callback;
+	ec_write_callback_t *write_callback;
+	void *payload;
+
+	ethercat_operation_t *next;
+};
+
+struct ethercat_t
+{
+	int socket;
+
+	ethercat_operation_t *operations;
 };
 
 
