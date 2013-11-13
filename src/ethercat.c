@@ -285,7 +285,6 @@ void ec_do_cycle(ethercat_t *ethercat)
 	ptr += 14 + 2;	// Skip headers
 
 	operation = ethercat->operations;
-	address_t recv_address;
 	bool error = false;
 
 	while(operation) {
@@ -300,7 +299,7 @@ void ec_do_cycle(ethercat_t *ethercat)
 		}
 
 		if(is_read_command(operation->command) && operation->read_callback)
-			operation->read_callback(recv_address, operation->payload, operation->length, (const void *) ptr);
+			operation->read_callback(header->address, operation->payload, operation->length, (const void *) ptr);
 		ptr += operation->length;
 
 		// Skip WKC
@@ -312,8 +311,6 @@ void ec_do_cycle(ethercat_t *ethercat)
 			operation = operation->next;
 		}
 	}
-
-	decode(packet);
 
 	free(packet);
 
