@@ -278,7 +278,11 @@ void ec_do_cycle(ethercat_t *ethercat)
 
 	// Send packet and await response
 	send(ethercat->socket, packet, packet_length, MSG_DONTROUTE | MSG_DONTWAIT);
-	int nbytes = read(ethercat->socket, (void *) packet, packet_length);
+
+	int nbytes = -1;
+	while(nbytes == -1) {
+		nbytes = read(ethercat->socket, (void *) packet, packet_length);
+	}
 
 	// Decode packet
 	ptr = packet;
@@ -294,6 +298,10 @@ void ec_do_cycle(ethercat_t *ethercat)
 		if((header->command != operation->command) || 
 		   (header->address.physical.adp != operation->address.physical.adp) ||
 		   (header->length != operation->length)) {
+			printf("Datagrams do not match: \n");
+			printf(" Length: %d vs %d\n", header->length, operation->length);
+			printf(" Command: %d vs %d\n", header->command, operation->command);
+			printf(" Address: %04x vs %04x\n", header->address.physical.adp, operation->address.physical.adp);
 			error = true;
 			break;
 		}
