@@ -95,6 +95,7 @@ struct ethercat_operation_t
 	ec_write_callback_t *write_callback;
 	void *payload;
 
+	ethercat_operation_t *prev;
 	ethercat_operation_t *next;
 };
 

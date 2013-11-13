@@ -100,10 +100,28 @@ static ethercat_operation_t* ec_create_operation(ethercat_t *ethercat)
 	operation->write_callback = NULL;
 	operation->payload = NULL;
 
+	operation->prev = NULL;
 	operation->next = ethercat->operations;
 	ethercat->operations = operation;
 
 	return operation;
+}
+
+
+static ethercat_operation_t *ec_remove_operation(ethercat_t *ethercat, ethercat_operation_t *operation)
+{
+	ethercat_operation_t *prev = operation->prev;
+	ethercat_operation_t *next = operation->next;
+
+	if(prev) prev->next = next;
+	if(next) next->prev = prev;
+
+	if(ethercat->operations == operation)
+		ethercat->operations = next;
+
+	free(operation);
+
+	return next;
 }
 
 
@@ -243,8 +261,11 @@ void ec_do_cycle(ethercat_t *ethercat)
 		*(ptr++) = 0;
 
 		// Request loading of datagram payload
-		if(is_write_command(operation->command) && operation->write_callback)
+		memset(ptr, 0, operation->length);
+		if(is_write_command(operation->command) && operation->write_callback) {
 			operation->write_callback(operation->address, operation->payload, operation->length, (void *) ptr);
+		}
+		
 		ptr += operation->length;
 
 		// Working counter
@@ -261,6 +282,8 @@ void ec_do_cycle(ethercat_t *ethercat)
 	}
 	printf("\n");*/
  
+	// Remove one-shot operations
+	// ...
 	// Send packet and await response
 	send(ethercat->socket, packet, packet_length, MSG_DONTROUTE | MSG_DONTWAIT);
 	int nbytes = read(ethercat->socket, (void *) packet, packet_length);
@@ -270,17 +293,61 @@ void ec_do_cycle(ethercat_t *ethercat)
 	ptr += 14 + 2;	// Skip headers
 
 	operation = ethercat->operations;
+	address_t recv_address;
+	bool error = false;
+
 	while(operation) {
-		ptr += 10;
-		if(is_read_command(operation->command) && operation->read_callback)
-			operation->read_callback(operation->address, operation->payload, operation->length, (const void *) ptr);
+		if(*ptr++ != operation->command) {
+			error = true;
+			break;
+		}
+
+		// Skip index
+		ptr += 1;
+
+		// Verify ADP part of address (ADO can change in AI mode)
+		recv_address.logical = ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24);
+		if(recv_address.physical.adp != operation->address.physical.adp) {
+			error = true;
+			break;
+		}
+		ptr += 4;
+
+		// Verify length
+		if( (ptr[0] | (ptr[1] << 8)) != operation->length ) {
+			error = true;
+			break;
+		}
 		ptr += 2;
-		operation = operation->next;
+
+		// Skip interrupt
+		ptr += 2;
+
+	// Remove one-shot operations
+	// ...
+		if(is_read_command(operation->command) && operation->read_callback)
+			operation->read_callback(recv_address, operation->payload, operation->length, (const void *) ptr);
+		ptr += operation->length;
+		ptr += 2;
+
+		if((operation->flags & EC_CALL_ONESHOT) == EC_CALL_ONESHOT) {
+			operation = ec_remove_operation(ethercat, operation);
+		} else {
+			operation = operation->next;
+		}
 	}
 
 	//decode(packet);
 
 	free(packet);
+
+	if(error) {
+		printf("Invalid EtherCAT packet received.\n");
+		exit(1);
+	}
+
+	// Remove one-shot operations
+	// ...
 }
 
 /********************
