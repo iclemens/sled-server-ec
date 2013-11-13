@@ -224,7 +224,6 @@ static bool is_write_command(command_type_t command)
 }
 
 
-
 void ec_do_cycle(ethercat_t *ethercat)
 {
 	const uint8_t ethernet_hdr[] = {0x00, 0xd0, 0xb7, 0xbd, 0x22, 0x56, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xa4};
@@ -248,17 +247,14 @@ void ec_do_cycle(ethercat_t *ethercat)
 
 	ethercat_operation_t *operation = ethercat->operations;
 	while(operation) {
-		*(ptr++) = operation->command;
-		*(ptr++) = 0x87;	// Index?!
-		*(ptr++) = operation->address.logical & 0xFF;
-		*(ptr++) = (operation->address.logical >> 8) & 0xFF;
-		*(ptr++) = (operation->address.logical >> 16) & 0xFF;
-		*(ptr++) = (operation->address.logical >> 24) & 0xFF;
-		*(ptr++) = operation->length & 0xFF;
-		*(ptr++) = (operation->length >> 8) & 0xFF;	// << flags!
+		datagram_header_t *header = (datagram_header_t *) ptr;
+		header->command = operation->command;
+		header->index = 0x87;
+		header->address.logical = operation->address.logical;
+		header->length = (operation->length & 0x7FF);
+		header->flags = (operation->next?0x10:00);
 
-		*(ptr++) = 0;
-		*(ptr++) = 0;
+		ptr += sizeof(datagram_header_t);
 
 		// Request loading of datagram payload
 		memset(ptr, 0, operation->length);
@@ -314,10 +310,10 @@ void ec_do_cycle(ethercat_t *ethercat)
 		ptr += 4;
 
 		// Verify length
-		if( (ptr[0] | (ptr[1] << 8)) != operation->length ) {
+		/*if( (ptr[0] | (ptr[1] << 8)) != operation->length ) {
 			error = true;
 			break;
-		}
+		}*/
 		ptr += 2;
 
 		// Skip interrupt
@@ -337,7 +333,7 @@ void ec_do_cycle(ethercat_t *ethercat)
 		}
 	}
 
-	//decode(packet);
+	decode(packet);
 
 	free(packet);
 
@@ -369,19 +365,18 @@ void print_header(ethercat_header_t *header)
 
 void print_datagram(datagram_t *datagram)
 {
-  printf("Command: %s; Index: %02x; Address: %04x:%04x (%08x); Length: %d; Circ: %d; More: %d; Int: %04x; Wkc: %04x\n",
-    command_description[(uint8_t) datagram->command],
-    datagram->index,
-    datagram->address.physical.ado,
-    datagram->address.physical.adp,
-    datagram->address.logical,
-    datagram->length,
-    datagram->circulating_frame,
-    datagram->more_following,
-    datagram->interrupt,
-    datagram->working_counter);
+  printf("Command: %s; Index: %02x; Address: %04x:%04x (%08x); Length: %d; Flags: %02x; Int: %04x; Wkc: %04x\n",
+    command_description[(uint8_t) datagram->header->command],
+    datagram->header->index,
+    datagram->header->address.physical.ado,
+    datagram->header->address.physical.adp,
+    datagram->header->address.logical,
+    datagram->header->length,
+    datagram->header->flags,
+    datagram->header->interrupt,
+    *(datagram->wkc));
 
-  for(int i = 0; i < datagram->length; i++) {
+  for(int i = 0; i < datagram->header->length; i++) {
     printf(" %02x", datagram->payload[i]);
   }
   printf("\n");
@@ -421,25 +416,12 @@ uint8_t *ec_read_header(uint8_t *buffer, ethercat_header_t *header)
  */
 uint8_t *ec_read_datagram(uint8_t *buffer, datagram_t *datagram)
 {
-  datagram->command = (command_type_t) buffer[0];
-  datagram->index = buffer[1];
-  datagram->address.physical.ado = buffer[2] | (buffer[3] << 8);
-  datagram->address.physical.adp = buffer[4] | (buffer[5] << 8);
-
-  uint16_t tmp = buffer[6] | (buffer[7] << 8);
-  datagram->length = tmp & 0x07FF;
-  datagram->circulating_frame = (tmp & 0x2000) >> 13;
-  datagram->more_following = (tmp & 0x8000) >> 15;
-
-  datagram->interrupt = buffer[8] | (buffer[9] << 8);
-
-  buffer += 10;
-
-  datagram->payload = buffer;
-  buffer += datagram->length;
-
-  datagram->working_counter = buffer[0] | (buffer[1] << 8);
-  buffer += 2;
+	datagram->header = (datagram_header_t *) buffer;
+	buffer += 10;
+	datagram->payload = buffer;
+	buffer += datagram->header->length;
+	datagram->wkc = (uint16_t *) buffer;
+	buffer += 2;
 
   return buffer;
 }

@@ -46,23 +46,24 @@ struct ethercat_header_t
   payload_type_t type;
 };
 
+struct datagram_header_t
+{
+	uint8_t command;
+	uint8_t index;
+	address_t address;
+
+	uint16_t length: 11;
+	unsigned int flags: 5;
+	
+	uint16_t interrupt;
+} __attribute__ ((packed));
+
 struct datagram_t
 {
-  command_type_t command;
-  uint8_t index;
-
-  address_t address;
-
-  uint16_t length;
-  uint8_t circulating_frame;
-  uint8_t more_following;
-  uint16_t interrupt;
-
-  uint8_t *payload;
-
-  uint16_t working_counter;
+	datagram_header_t *header;
+	uint8_t *payload;
+	uint16_t *wkc;
 };
-
 
 static const char *command_description[] = {
   "No operation",
