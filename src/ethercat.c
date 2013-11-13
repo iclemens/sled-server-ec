@@ -123,6 +123,7 @@ void ec_request_read(ethercat_t *ethercat,
 
 	operation->flags = flags;
 	operation->command = read_command_from_flags(flags);
+	operation->address = address;
 	operation->length = length;
 	operation->read_callback = callback;
 	operation->payload = payload;
@@ -145,6 +146,7 @@ void ec_request_write(ethercat_t *ethercat,
 
 	operation->flags = flags;
 	operation->command = write_command_from_flags(flags);
+	operation->address = address;
 	operation->length = length;
 	operation->write_callback = callback;
 	operation->payload = payload;
@@ -153,12 +155,12 @@ void ec_request_write(ethercat_t *ethercat,
 
 static int ec_get_packet_length(ethercat_t *ethercat)
 {
-	int length = 14 + 2 + 4;	// Ethernet + Ethercat + FCS
+	int length = 14 + 2;	// Ethernet + Ethercat
 
 	ethercat_operation_t *operation = ethercat->operations;
 	while(operation) {
 		// Datagram header + Payload
-		length += 10 + operation->length;
+		length += 12 + operation->length;
 		operation = operation->next;
 	}
 
@@ -166,14 +168,52 @@ static int ec_get_packet_length(ethercat_t *ethercat)
 }
 
 
+static bool is_read_command(command_type_t command)
+{
+	switch(command) {
+		case cmd_ainc_r:
+		case cmd_ainc_rw:
+		case cmd_cadr_r:
+		case cmd_cadr_rw:
+		case cmd_bcst_r:
+		case cmd_bcst_rw:
+		case cmd_lgcl_r:
+		case cmd_lgcl_rw:
+		case cmd_cadr_rmwr:
+			return true;
+		default:
+			return false;
+	}
+}
+
+
+static bool is_write_command(command_type_t command)
+{
+	switch(command) {
+		case cmd_ainc_w:
+		case cmd_ainc_rw:
+		case cmd_cadr_w:
+		case cmd_cadr_rw:
+		case cmd_bcst_w:
+		case cmd_bcst_rw:
+		case cmd_lgcl_w:
+		case cmd_lgcl_rw:
+		case cmd_cadr_rmwr:
+			return true;
+		default:
+			return false;
+	}
+}
+
+
+
 void ec_do_cycle(ethercat_t *ethercat)
 {
 	const uint8_t ethernet_hdr[] = {0x00, 0xd0, 0xb7, 0xbd, 0x22, 0x56, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xa4};
 
-	int length = ec_get_packet_length(ethercat);
-	printf("Packet length: %02x\n", length);
+	int packet_length = ec_get_packet_length(ethercat);
 
-	uint8_t *packet = (uint8_t *) malloc(length);
+	uint8_t *packet = (uint8_t *) malloc(packet_length);
 
 	if(packet == NULL) {
 		perror("malloc()");
@@ -184,46 +224,63 @@ void ec_do_cycle(ethercat_t *ethercat)
 	uint8_t *ptr = packet;
 	memcpy(ptr, ethernet_hdr, 14); ptr += 14;
 
-	ptr[0] = length & 0x00FF;
-	ptr[1] = (length & 0xFF00) >> 8;
+	int payload_length = packet_length - 14 - 2 - 4;
+	*(ptr++) = payload_length & 0xFF;
+	*(ptr++) = (payload_length >> 8) & 0x7F | (1 << 4);
 
-/*    uint16_t tmp = buffer[0] | (buffer[1] << 8);
-    header->length = tmp & 0x07FF;
-    header->type = (payload_type_t) ((tmp & 0xF000) >> 12);
-    buffer += 2;
-  }*/
-	
-	printf("Sending:\n");
-	for(int i = 0; i < length; i++) {
+	ethercat_operation_t *operation = ethercat->operations;
+	while(operation) {
+		*(ptr++) = operation->command;
+		*(ptr++) = 0x87;	// Index?!
+		*(ptr++) = operation->address.logical & 0xFF;
+		*(ptr++) = (operation->address.logical >> 8) & 0xFF;
+		*(ptr++) = (operation->address.logical >> 16) & 0xFF;
+		*(ptr++) = (operation->address.logical >> 24) & 0xFF;
+		*(ptr++) = operation->length & 0xFF;
+		*(ptr++) = (operation->length >> 8) & 0xFF;	// << flags!
+
+		*(ptr++) = 0;
+		*(ptr++) = 0;
+
+		// Request loading of datagram payload
+		if(is_write_command(operation->command) && operation->write_callback)
+			operation->write_callback(operation->address, operation->payload, operation->length, (void *) ptr);
+		ptr += operation->length;
+
+		// Working counter
+		*(ptr++) = 0x01;
+		*(ptr++) = 0x00;
+
+		operation = operation->next;
+	}
+
+	// Dump packet
+	/*printf("Sending:\n");
+	for(int i = 0; i < packet_length; i++) {
 		printf("%02x ", packet[i]);
 	}
-	printf("\n");
-
+	printf("\n");*/
+ 
 	// Send packet and await response
-	send(ethercat->socket, packet, length, MSG_DONTROUTE | MSG_DONTWAIT);
-	int nbytes = read(ethercat->socket, (void *) packet, length);
+	send(ethercat->socket, packet, packet_length, MSG_DONTROUTE | MSG_DONTWAIT);
+	int nbytes = read(ethercat->socket, (void *) packet, packet_length);
 
-	// Show packet
-	decode(packet);
+	// Decode packet
+	ptr = packet;
+	ptr += 14 + 2;	// Skip headers
+
+	operation = ethercat->operations;
+	while(operation) {
+		ptr += 10;
+		if(is_read_command(operation->command) && operation->read_callback)
+			operation->read_callback(operation->address, operation->payload, operation->length, (const void *) ptr);
+		ptr += 2;
+		operation = operation->next;
+	}
+
+	//decode(packet);
 
 	free(packet);
-
-
-	// Setup test frame
-/*	uint8_t data[] = {0x00, 0xd0, 0xb7, 0xbd, 0x22, 0x56,
-                    0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                    0x88, 0xa4,
-                    0x0e, 0x10,
-
-			// START OF DATAGRAM
-										0x04, 	// Auto increment read (was 7 broadcast read)
-										0x87, 
-										0x02, 0x00, // Auto increment address 1
-										0x30, 0x01, // AL status
-										//0x10, 0x00,	// Address
-										0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
-										0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-										0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};	*/
 }
 
 /********************

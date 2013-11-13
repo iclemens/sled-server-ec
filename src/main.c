@@ -7,7 +7,11 @@
 
 void read_callback(const address_t address, void *payload, uint16_t length, const void *data)
 {
-	printf("Received %d bytes; address = %08x!\n", length, address.logical);
+	const uint8_t *tmp = (const uint8_t *) data;
+
+	printf("Received: %04x ", tmp[0] + (tmp[1] << 8));
+	printf("(adress: %04x/%04x)\n", address.physical.ado, address.physical.adp);
+
 }
 
 int main()
@@ -15,10 +19,10 @@ int main()
 	struct ethercat_t *ethercat = ec_create("eth2");
 
 	address_t address;
-	address.physical.ado = 0x0002;
+	address.physical.ado = 0x0000;
 	address.physical.adp = 0x0130;
 
-	ec_request_read(ethercat, address, 30, read_callback, NULL, EC_CALL_ONESHOT | EC_ADDR_AI);
+	ec_request_read(ethercat, address, 2, read_callback, NULL, EC_CALL_ONESHOT | EC_ADDR_AI);
 
 	ec_do_cycle(ethercat);
 

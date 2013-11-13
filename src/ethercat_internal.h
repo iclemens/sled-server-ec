@@ -87,6 +87,7 @@ static const char *command_description[] = {
 struct ethercat_operation_t
 {
 	command_type_t command;
+	address_t address;
 	uint16_t length;
 	int flags;
 
