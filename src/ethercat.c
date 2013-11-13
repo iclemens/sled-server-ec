@@ -224,6 +224,31 @@ static bool is_write_command(command_type_t command)
 }
 
 
+uint8_t *ec_add_operation(uint8_t *ptr, ethercat_operation_t *operation)
+{
+	datagram_header_t *header = (datagram_header_t *) ptr;
+	header->command = operation->command;
+	header->index = 0x87;
+	header->address.logical = operation->address.logical;
+	header->length = (operation->length & 0x7FF);
+	header->flags = (operation->next?0x10:00);
+	ptr += sizeof(datagram_header_t);
+
+	// Request loading of datagram payload
+	memset(ptr, 0, operation->length);
+	if(is_write_command(operation->command) && operation->write_callback)
+		operation->write_callback(operation->address, operation->payload, operation->length, (void *) ptr);
+	ptr += operation->length;
+
+	// Working counter
+	uint16_t *wkc = (uint16_t *) ptr;
+	*wkc = 0x0001;
+	ptr += 2;
+
+	return ptr;
+}
+
+
 void ec_do_cycle(ethercat_t *ethercat)
 {
 	const uint8_t ethernet_hdr[] = {0x00, 0xd0, 0xb7, 0xbd, 0x22, 0x56, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xa4};
@@ -247,39 +272,10 @@ void ec_do_cycle(ethercat_t *ethercat)
 
 	ethercat_operation_t *operation = ethercat->operations;
 	while(operation) {
-		datagram_header_t *header = (datagram_header_t *) ptr;
-		header->command = operation->command;
-		header->index = 0x87;
-		header->address.logical = operation->address.logical;
-		header->length = (operation->length & 0x7FF);
-		header->flags = (operation->next?0x10:00);
-
-		ptr += sizeof(datagram_header_t);
-
-		// Request loading of datagram payload
-		memset(ptr, 0, operation->length);
-		if(is_write_command(operation->command) && operation->write_callback) {
-			operation->write_callback(operation->address, operation->payload, operation->length, (void *) ptr);
-		}
-		
-		ptr += operation->length;
-
-		// Working counter
-		*(ptr++) = 0x01;
-		*(ptr++) = 0x00;
-
+		ptr = ec_add_operation(ptr, operation);
 		operation = operation->next;
 	}
 
-	// Dump packet
-	/*printf("Sending:\n");
-	for(int i = 0; i < packet_length; i++) {
-		printf("%02x ", packet[i]);
-	}
-	printf("\n");*/
- 
-	// Remove one-shot operations
-	// ...
 	// Send packet and await response
 	send(ethercat->socket, packet, packet_length, MSG_DONTROUTE | MSG_DONTWAIT);
 	int nbytes = read(ethercat->socket, (void *) packet, packet_length);
@@ -293,37 +289,21 @@ void ec_do_cycle(ethercat_t *ethercat)
 	bool error = false;
 
 	while(operation) {
-		if(*ptr++ != operation->command) {
+		datagram_header_t *header = (datagram_header_t *) ptr;
+		ptr += sizeof(datagram_header_t);
+
+		if((header->command != operation->command) || 
+		   (header->address.physical.adp != operation->address.physical.adp) ||
+		   (header->length != operation->length)) {
 			error = true;
 			break;
 		}
 
-		// Skip index
-		ptr += 1;
-
-		// Verify ADP part of address (ADO can change in AI mode)
-		recv_address.logical = ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24);
-		if(recv_address.physical.adp != operation->address.physical.adp) {
-			error = true;
-			break;
-		}
-		ptr += 4;
-
-		// Verify length
-		/*if( (ptr[0] | (ptr[1] << 8)) != operation->length ) {
-			error = true;
-			break;
-		}*/
-		ptr += 2;
-
-		// Skip interrupt
-		ptr += 2;
-
-	// Remove one-shot operations
-	// ...
 		if(is_read_command(operation->command) && operation->read_callback)
 			operation->read_callback(recv_address, operation->payload, operation->length, (const void *) ptr);
 		ptr += operation->length;
+
+		// Skip WKC
 		ptr += 2;
 
 		if((operation->flags & EC_CALL_ONESHOT) == EC_CALL_ONESHOT) {
